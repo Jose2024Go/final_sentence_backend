@@ -52,6 +52,7 @@ async def iniciar_partida(sala_id: str):
     await administrador_juego.iniciar_partida(sala_id)
     return {"mensaje": "Partida iniciada"}
 
+# backend/main.py (fragmento WebSocket actualizado)
 @app.websocket("/ws/{sala_id}/{jugador_id}")
 async def websocket_sala(websocket: WebSocket, sala_id: str, jugador_id: str):
     await websocket.accept()
@@ -79,7 +80,6 @@ async def websocket_sala(websocket: WebSocket, sala_id: str, jugador_id: str):
                 administrador_juego.conexiones[sala_id].remove(websocket)
             except ValueError:
                 pass
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

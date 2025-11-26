@@ -1,4 +1,4 @@
-#backend\game_manager.py
+# backend/game_manager.py
 import asyncio
 import random
 import string
@@ -62,12 +62,30 @@ class AdministradorJuego:
             return sala_activa
         sala_activa.jugadores.append(jugador)
         self.base_datos.actualizar_sala(sala_activa)
+        
+        # ✅ NOTIFICAR A TODOS QUE UN JUGADOR SE UNIÓ
+        asyncio.create_task(self.transmitir_a_sala(sala_activa.id, {
+            "tipo": "jugador_unido",
+            "jugador": jugador.dict()
+        }))
+        
+        # ✅ INICIAR PARTIDA AUTOMÁTICAMENTE SI ESTÁ LLENA
+        if len(sala_activa.jugadores) == sala_activa.max_jugadores:
+            asyncio.create_task(self.iniciar_partida(sala_activa.id))
+        
         return sala_activa
 
     def abandonar_sala(self, jugador_id: str, sala_id: str):
         if sala_id in self.salas_activas:
             sala = self.salas_activas[sala_id]
+            jugador_previo = next((j for j in sala.jugadores if j.id == jugador_id), None)
             sala.jugadores = [j for j in sala.jugadores if j.id != jugador_id]
+            if jugador_previo:
+                # ✅ NOTIFICAR QUE EL JUGADOR ABANDONÓ
+                asyncio.create_task(self.transmitir_a_sala(sala_id, {
+                    "tipo": "jugador_abandono",
+                    "jugador_id": jugador_id
+                }))
             if not sala.jugadores:
                 self.eliminar_sala(sala_id)
             else:
@@ -182,6 +200,6 @@ class AdministradorJuego:
                 try:
                     await websocket.send_json(mensaje)
                     conexiones_validas.append(websocket)
-                except:
-                    pass
+                except Exception as e:
+                    print(f"Error enviando mensaje: {e}")
             self.conexiones[sala_id] = conexiones_validas
