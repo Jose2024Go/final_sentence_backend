@@ -18,6 +18,8 @@ class AdministradorJuego:
         # conexiones: sala_id -> list of WebSocket
         self.conexiones: Dict[str, List[WebSocket]] = {}
         self.frases_terror = self._cargar_frases_terror()
+        # trackear monitores de tiempo por sala (para poder cancelarlos si se finaliza antes)
+        self._monitores_tiempo: Dict[str, asyncio.Task] = {}
 
     def _cargar_frases_terror(self) -> List[Frase]:
         """Carga frases de terror desde la base de datos"""
@@ -173,38 +175,114 @@ class AdministradorJuego:
             return
         if not sala.jugador_anfitrion or not any(j.id == sala.jugador_anfitrion for j in sala.jugadores):
             sala.jugador_anfitrion = sala.jugadores[0].id
-            self.base_datos.actualizar_sala(sala)
+            try:
+                self.base_datos.actualizar_sala(sala)
+            except Exception:
+                pass
 
     # ---------- Inicio de partida ----------
     async def iniciar_partida(self, sala_id: str):
-        """
-        Inicio de partida: solo si la sala está en 'esperando' y tiene al menos 2 jugadores.
-        """
         if sala_id not in self.salas_activas:
             return
+
         sala = self.salas_activas[sala_id]
 
+        # Evitar relanzar la partida
         if sala.estado == "jugando":
             return
+
+        # Deben haber al menos 2 jugadores
         if len(sala.jugadores) < 2:
             await self.transmitir_a_sala(sala_id, {
                 "tipo": "error",
-                "mensaje": "No hay suficientes jugadores para iniciar (mínimo 2)."
+                "mensaje": "No hay suficientes jugadores para iniciar."
             })
             return
 
+        # Marcar sala como activa
         sala.estado = "jugando"
         sala.ronda_actual = (sala.ronda_actual or 0) + 1
         sala.tiempo_inicio = datetime.now()
-        sala.frase_actual = random.choice(self.frases_terror) if self.frases_terror else None
-        self.base_datos.actualizar_sala(sala)
 
+        # Seleccionar frase de la ronda (fallback si no hay frases)
+        sala.frase_actual = random.choice(self.frases_terror) if self.frases_terror else None
+
+        # 🔥 **SOLUCIÓN CRÍTICA**
+        # Habilitar correctamente a todos los jugadores para que el backend sí procese sus teclas
+        for jugador in sala.jugadores:
+            jugador.estado = EstadoJugador.JUGANDO   # <--- ESSENCIAL
+            jugador.errores = 0
+            jugador.progreso = 0
+            jugador.ppm = 0
+
+        # Guardar en DB si corresponde
+        try:
+            self.base_datos.actualizar_sala(sala)
+        except Exception:
+            pass
+
+        # Avisar a todos los jugadores que la partida comenzó
         await self.transmitir_a_sala(sala_id, {
             "tipo": "partida_iniciada",
             "frase": sala.frase_actual.texto if sala.frase_actual else "",
             "tiempo_limite": getattr(sala, "tiempo_limite", 45),
             "ronda_actual": sala.ronda_actual
         })
+
+        # Lanzar monitor de tiempo para la ronda (se reemplaza si ya existía uno)
+        tiempo_limite = getattr(sala, "tiempo_limite", 45)
+        if sala_id in self._monitores_tiempo:
+            # cancelar monitor previo si existiera
+            tarea_prev = self._monitores_tiempo.pop(sala_id)
+            try:
+                tarea_prev.cancel()
+            except Exception:
+                pass
+        tarea = asyncio.create_task(self._monitor_tiempo_ronda(sala_id, tiempo_limite))
+        self._monitores_tiempo[sala_id] = tarea
+
+    async def _monitor_tiempo_ronda(self, sala_id: str, tiempo_limite: int):
+        """
+        Espera tiempo_limite segundos y procesa jugadores que no completaron.
+        Si la partida ya finalizó antes de tiempo, la tarea saldrá.
+        """
+        try:
+            await asyncio.sleep(tiempo_limite)
+        except asyncio.CancelledError:
+            return
+
+        # Si la sala ya fue finalizada, no hacer nada
+        if sala_id not in self.salas_activas:
+            return
+        sala = self.salas_activas[sala_id]
+        if sala.estado != "jugando":
+            return
+
+        # Marcar jugadores que no completaron como eliminados (o procesar según reglas)
+        jugadores_no_completaron = [j for j in sala.jugadores if getattr(j, "progreso", 0) < 100 and getattr(j, "estado", None) == EstadoJugador.JUGANDO]
+
+        for j in jugadores_no_completaron:
+            j.estado = EstadoJugador.ELIMINADO
+            # Notificamos su eliminación por tiempo agotado
+            await self.transmitir_a_sala(sala_id, {
+                "tipo": "jugador_eliminado",
+                "jugador_id": j.id,
+                "razon": "tiempo_agotado"
+            })
+
+        # Determinar ganador si hay uno vivo
+        jugadores_vivos = [j for j in sala.jugadores if getattr(j, "estado", None) == EstadoJugador.JUGANDO]
+        if len(jugadores_vivos) == 1:
+            ganador = jugadores_vivos[0].id
+            await self.finalizar_partida(sala_id, ganador)
+        elif len(jugadores_vivos) == 0:
+            # Si ninguno quedó, elegir el que tenga mejor progreso/ppm como fallback
+            mejor = max(sala.jugadores, key=lambda x: (getattr(x, "progreso", 0), getattr(x, "ppm", 0)), default=None)
+            ganador = mejor.id if mejor else None
+            await self.finalizar_partida(sala_id, ganador)
+        else:
+            # Si quedaron varios vivos (nadie completó), finalizamos y mandamos estadísticas
+            await self.finalizar_partida(sala_id, None)
 
     # ---------- Escritura / eliminación ----------
     async def procesar_escritura(self, jugador_id: str, sala_id: str, texto: str, tiempo_tomado: float):
@@ -223,6 +301,8 @@ class AdministradorJuego:
         if es_correcto:
             jugador.ppm = ppm
             jugador.progreso = 100
+            jugador.estado = EstadoJugador.JUGADO if hasattr(EstadoJugador, "JUGADO") else jugador.estado
+            # Notificar completado
             await self.transmitir_a_sala(sala_id, {
                 "tipo": "jugador_completo",
                 "jugador_id": jugador_id,
@@ -240,7 +320,24 @@ class AdministradorJuego:
             if jugador.errores >= 3:
                 await self.eliminar_jugador(jugador_id, sala_id)
 
-        self.base_datos.actualizar_sala(sala)
+        # Guardar estado de sala
+        try:
+            self.base_datos.actualizar_sala(sala)
+        except Exception:
+            pass
+
+        # Si todos completaron o sólo queda uno jugando, finalizar partida
+        jugadores_vivos = [j for j in sala.jugadores if getattr(j, "estado", None) == EstadoJugador.JUGANDO]
+        completados = [j for j in sala.jugadores if getattr(j, "progreso", 0) == 100]
+        if len(completados) == len(sala.jugadores):
+            # todos completaron: elegir mejor ppm como ganador
+            mejor = max(sala.jugadores, key=lambda x: getattr(x, "ppm", 0), default=None)
+            ganador = mejor.id if mejor else None
+            await self.finalizar_partida(sala_id, ganador)
+        elif len(jugadores_vivos) == 1 and len(sala.jugadores) > 1:
+            # un único vivo -> ganador por supervivencia
+            ganador = jugadores_vivos[0].id
+            await self.finalizar_partida(sala_id, ganador)
 
     async def eliminar_jugador(self, jugador_id: str, sala_id: str):
         if sala_id not in self.salas_activas:
@@ -264,6 +361,14 @@ class AdministradorJuego:
         if sala_id not in self.salas_activas:
             return
         sala = self.salas_activas[sala_id]
+        # cancelar monitor de tiempo si existe
+        if sala_id in self._monitores_tiempo:
+            tarea = self._monitores_tiempo.pop(sala_id)
+            try:
+                tarea.cancel()
+            except Exception:
+                pass
+
         sala.estado = "finalizada"
         from models import Partida
         partida = Partida(
@@ -285,6 +390,7 @@ class AdministradorJuego:
             "ganador_id": ganador_id,
             "estadisticas": [self._serializar_jugador(j) for j in sala.jugadores]
         })
+        # eliminar sala después de un tiempo para limpieza (30s)
         asyncio.create_task(self._eliminar_sala_despues(sala_id, 30))
 
     async def _eliminar_sala_despues(self, sala_id: str, segundos: int):
@@ -387,4 +493,3 @@ class AdministradorJuego:
             self.base_datos.eliminar_sala(sala_id)
         except Exception:
             pass
-
