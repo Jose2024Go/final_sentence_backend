@@ -3,3 +3,6 @@ uvicorn
 pydantic
 pymongo
 python-dotenv
+fastapi
+uvicorn[standard]
+websockets
