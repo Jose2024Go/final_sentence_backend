@@ -22,18 +22,30 @@ class AdministradorJuego:
         self._monitores_tiempo: Dict[str, asyncio.Task] = {}
 
     def _cargar_frases_terror(self) -> List[Frase]:
-        """Carga frases de terror desde la base de datos"""
-        frases_db = self.base_datos.obtener_frases_terror(100)
+        """Carga frases de terror directamente sin usar la base de datos."""
+        frases_fijas = [
+            "La sombra avanzaba silenciosa por el pasillo.",
+            "Al abrir la puerta, nadie respondió al llamado.",
+            "El susurro decía mi nombre al oído sin moverse nadie.",
+            "Las luces titilaron y la figura estaba ya detrás de mí.",
+            "No había teléfonos en la casa, pero alguien marcó desde adentro.",
+            "Encontré una nota en mi almohada que decía: vuelve a dormir.",
+            "El espejo reflejó una habitación que no era la mía.",
+            "Cada vez que parpadeaba, alguien estaba más cerca.",
+            "La casa respiraba y yo no estaba dentro de ella.",
+            "Las marcas en la pared formaban mi nombre, escrito de atrás hacia adelante.",
+        ]
+
         frases = []
-        for i, frase in enumerate(frases_db):
-            texto = frase.get("texto") or frase.get("text") or ""
+        for i, texto in enumerate(frases_fijas):
             frases.append(Frase(
-                id=str(frase.get("_id", i)),
+                id=str(i),
                 texto=texto,
-                dificultad=frase.get("dificultad", "media"),
-                categoria=frase.get("categoria", "terror")
+                dificultad="media",
+                categoria="terror"
             ))
         return frases
+
 
     def _generar_codigo_sala(self) -> str:
         """Genera un código único de 6 caracteres para la sala"""
