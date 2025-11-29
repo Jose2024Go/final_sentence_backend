@@ -12,15 +12,40 @@ class BaseDatos:
         self.cliente = MongoClient(self.conexion_string)
         self.db = self.cliente.final_silencio
         self._crear_indices()
+        self.inicializar_frases_terror()   # <-- ESTA LÍNEA ES LA ÚNICA AÑADIDA
 
     def _crear_indices(self):
-        """Crea índices para mejor rendimiento"""
         self.db.jugadores.create_index("id", unique=True)
         self.db.salas.create_index("id", unique=True)
         self.db.salas.create_index("codigo", unique=True)
         self.db.partidas.create_index("fecha")
 
-    # --- JUGADORES ---
+    # -------------------- NUEVO MÉTODO --------------------
+    def inicializar_frases_terror(self):
+        """Inserta frases de terror si la colección está vacía."""
+        if self.db.frases.count_documents({}) > 0:
+            return  # Ya existen, no duplicar
+
+        frases = [
+            { "texto": "La sombra avanzaba silenciosa por el pasillo.", "dificultad": "media", "categoria": "terror" },
+            { "texto": "Al abrir la puerta, nadie respondió al llamado.", "dificultad": "baja", "categoria": "terror" },
+            { "texto": "El susurro decía mi nombre al oído sin moverse nadie.", "dificultad": "media", "categoria": "terror" },
+            { "texto": "Las luces titilaron y la figura estaba ya detrás de mí.", "dificultad": "alta", "categoria": "terror" },
+            { "texto": "No había teléfonos en la casa, pero alguien marcó desde adentro.", "dificultad": "media", "categoria": "terror" },
+            { "texto": "Encontré una nota en mi almohada que decía: vuelve a dormir.", "dificultad": "baja", "categoria": "terror" },
+            { "texto": "El espejo reflejó una habitación que no era la mía.", "dificultad": "media", "categoria": "terror" },
+            { "texto": "Cada vez que parpadeaba, alguien estaba más cerca.", "dificultad": "alta", "categoria": "terror" },
+            { "texto": "La casa respiraba y yo no estaba dentro de ella.", "dificultad": "alta", "categoria": "terror" },
+            { "texto": "Las marcas en la pared formaban mi nombre, escrito de atrás hacia adelante.", "dificultad": "alta", "categoria": "terror" }
+        ]
+
+        for frase in frases:
+            frase["fecha_agregada"] = datetime.now()
+            self.db.frases.insert_one(frase)
+
+        print("✔ Frases de terror inicializadas en MongoDB")
+
+    # -------------------- JUGADORES --------------------
     def guardar_jugador(self, jugador: Jugador):
         jugador_dict = jugador.dict()
         jugador_dict["ultima_conexion"] = datetime.now()
@@ -34,7 +59,7 @@ class BaseDatos:
         datos = self.db.jugadores.find_one({"id": jugador_id})
         return Jugador(**datos) if datos else None
 
-    # --- SALAS ---
+    # -------------------- SALAS --------------------
     def crear_sala(self, sala: Sala) -> str:
         sala_dict = sala.dict()
         sala_dict["fecha_creacion"] = datetime.now()
@@ -58,7 +83,7 @@ class BaseDatos:
     def eliminar_sala(self, sala_id: str):
         self.db.salas.delete_one({"id": sala_id})
 
-    # --- PARTIDAS ---
+    # -------------------- PARTIDAS --------------------
     def guardar_partida(self, partida: Partida) -> str:
         partida_dict = partida.dict()
         resultado = self.db.partidas.insert_one(partida_dict)
@@ -95,7 +120,7 @@ class BaseDatos:
             )
         return EstadisticasJugador(jugador_id=jugador_id, nombre="")
 
-    # --- FRASES ---
+    # -------------------- FRASES --------------------
     def obtener_frases_terror(self, cantidad: int = 10) -> list:
         return list(self.db.frases.find({"categoria": "terror"}).limit(cantidad))
 
@@ -107,3 +132,4 @@ class BaseDatos:
             "fecha_agregada": datetime.now()
         }
         self.db.frases.insert_one(frase)
+
