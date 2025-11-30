@@ -5,8 +5,11 @@ from models import Jugador, TipoSala, MensajeWebSocket
 from game_manager import AdministradorJuego
 import asyncio
 
-app = FastAPI(title="Final Silencio API", version="1.0.0")
 
+app = FastAPI(title="Final Silencio API", version="1.0.0")
+from routes_ws import router as ws_router
+
+app.include_router(ws_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
