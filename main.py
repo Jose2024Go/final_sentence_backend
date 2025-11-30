@@ -1,16 +1,13 @@
-# main.py
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from models import Jugador, TipoSala
-from game_controller import juego  # Instancia única
+from game_manager import AdministradorJuego
+from models import Jugador
+import asyncio
 
-# 🔥 IMPORTANTE: importar las rutas WebSocket
-from routes_ws import router as ws_router
+app = FastAPI()
+admin = AdministradorJuego()
 
-app = FastAPI(title="Final Sentence API", version="1.0.0")
-
-# ------------------------ CORS ------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,45 +16,63 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ------------------------ IMPORTAR RUTAS WS ------------------------
-# 🔥 Si no agregas esto, los WebSockets NO EXISTEN
-app.include_router(ws_router)
+# ===================================
+# MANEJO WEBSOCKET
+# ===================================
 
-# ------------------------ HTTP ENDPOINTS ------------------------
+@app.websocket("/ws/{sala_id}/{jugador_id}")
+async def websocket_endpoint(ws: WebSocket, sala_id: str, jugador_id: str):
+    await ws.accept()
 
-@app.post("/jugador/nuevo")
-async def crear_jugador(nombre: str, avatar: str = "default"):
-    jugador_id = f"jugador_{abs(hash(nombre)) % (10**8)}"
-    jugador = Jugador(id=jugador_id, nombre=nombre, avatar=avatar)
-    juego.base_datos.guardar_jugador(jugador)
-    return jugador.dict()
+    print(f"WS conectado: sala={sala_id} jugador={jugador_id}")
 
-@app.get("/jugador/{jugador_id}/estadisticas")
-async def obtener_estadisticas(jugador_id: str):
-    stats = juego.base_datos.obtener_estadisticas_jugador(jugador_id)
-    return stats.dict()
+    # Registrar conexión
+    admin.conexiones.setdefault(sala_id, [])
+    admin.conexiones[sala_id].append(ws)
 
-@app.post("/sala/crear")
-async def crear_sala(jugador_id: str, tipo: TipoSala, max_jugadores: int = 10):
-    jugador = juego.base_datos.obtener_jugador(jugador_id)
-    sala = juego.crear_sala(jugador, tipo, max_jugadores)
-    return sala.dict()
+    try:
+        # Asegurar que el jugador está en la sala
+        admin.unir_sala_ws(jugador_id, sala_id)
 
-@app.post("/sala/unir")
-async def unir_sala(jugador_id: str, codigo_sala: str):
-    jugador = juego.base_datos.obtener_jugador(jugador_id)
-    sala = juego.unir_sala(jugador, codigo_sala)
-    return sala.dict() if sala else {"error": "Sala no encontrada"}
+        # Enviar estado inicial
+        await admin.enviar_estado_sala(sala_id)
 
-@app.post("/sala/{sala_id}/iniciar")
-async def iniciar_partida(sala_id: str):
-    await juego.iniciar_partida(sala_id)
-    return {"mensaje": "Partida iniciada"}
+        while True:
+            data = await ws.receive_json()
+            tipo = data.get("tipo")
+            payload = data.get("datos", {})
 
-# ------------------------ ROOT PARA RENDER ------------------------
-@app.get("/")
-async def root():
-    return {"status": "ok", "message": "Final Sentence Backend activo!"}
+            # =======================================================
+            # JOIN (el frontend lo envía automáticamente al conectar)
+            # =======================================================
+            if tipo == "join":
+                await admin.enviar_estado_sala(sala_id)
 
+            # =======================================================
+            # INICIAR PARTIDA (botón del anfitrión)
+            # =======================================================
+            elif tipo == "iniciar_partida":
+                await admin.iniciar_partida(sala_id)
 
+            # =======================================================
+            # ESCRITURA DE FRASE (PantallaJuego.jsx)
+            # =======================================================
+            elif tipo == "escritura":
+                texto = payload.get("texto", "")
+                tiempo_tomado = payload.get("tiempo_tomado", 1)
+
+                await admin.procesar_escritura(
+                    jugador_id,
+                    sala_id,
+                    texto,
+                    tiempo_tomado
+                )
+
+    except WebSocketDisconnect:
+        print(f"Jugador desconectado: {jugador_id}")
+        if sala_id in admin.conexiones:
+            try:
+                admin.conexiones[sala_id].remove(ws)
+            except:
+                pass
 
