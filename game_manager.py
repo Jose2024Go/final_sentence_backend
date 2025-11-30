@@ -22,8 +22,33 @@ class AdministradorJuego:
         self._monitores_tiempo: Dict[str, asyncio.Task] = {}
 
     def _cargar_frases_terror(self) -> List[Frase]:
-        """Carga frases de terror directamente sin usar la base de datos."""
-        frases_fijas = [
+        """
+        Carga frases desde MongoDB.
+        Si la base está vacía o falla -> usa frases hardcodeadas.
+        """
+        # --- Intento 1: cargar desde MongoDB ---
+        try:
+            frases_db = self.base_datos.obtener_frases_terror(100)
+        except Exception:
+            frases_db = []
+
+        frases = []
+
+        if frases_db:
+            # Sí hay frases en MongoDB
+            for i, frase in enumerate(frases_db):
+                frases.append(Frase(
+                    id=str(frase.get("_id", i)),
+                    texto=frase.get("texto", ""),
+                    dificultad=frase.get("dificultad", "media"),
+                    categoria=frase.get("categoria", "terror")
+                ))
+            return frases
+
+        # -------------------------------
+        # 🔥 FALLBACK HARDCODEADO
+        # -------------------------------
+        frases_hardcode = [
             "La sombra avanzaba silenciosa por el pasillo.",
             "Al abrir la puerta, nadie respondió al llamado.",
             "El susurro decía mi nombre al oído sin moverse nadie.",
@@ -33,19 +58,22 @@ class AdministradorJuego:
             "El espejo reflejó una habitación que no era la mía.",
             "Cada vez que parpadeaba, alguien estaba más cerca.",
             "La casa respiraba y yo no estaba dentro de ella.",
-            "Las marcas en la pared formaban mi nombre, escrito de atrás hacia adelante.",
+            "Las marcas en la pared formaban mi nombre al revés."
         ]
 
-        frases = []
-        for i, texto in enumerate(frases_fijas):
-            frases.append(Frase(
+        frases = [
+            Frase(
                 id=str(i),
-                texto=texto,
+                texto=txt,
                 dificultad="media",
                 categoria="terror"
-            ))
-        return frases
+            )
+            for i, txt in enumerate(frases_hardcode)
+        ]
 
+        print("⚠ Advertencia: NO se cargaron frases desde MongoDB, usando frases HARDCODEADAS.")
+
+        return frases
 
     def _generar_codigo_sala(self) -> str:
         """Genera un código único de 6 caracteres para la sala"""
