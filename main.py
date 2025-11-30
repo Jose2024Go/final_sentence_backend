@@ -1,11 +1,16 @@
-from fastapi import FastAPI, WebSocket
+# main.py
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from models import Jugador, TipoSala
 from game_controller import juego  # Instancia única
-import asyncio
+
+# 🔥 IMPORTANTE: importar las rutas WebSocket
+from routes_ws import router as ws_router
 
 app = FastAPI(title="Final Sentence API", version="1.0.0")
 
+# ------------------------ CORS ------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,6 +18,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ------------------------ IMPORTAR RUTAS WS ------------------------
+# 🔥 Si no agregas esto, los WebSockets NO EXISTEN
+app.include_router(ws_router)
 
 # ------------------------ HTTP ENDPOINTS ------------------------
 
@@ -45,8 +54,10 @@ async def iniciar_partida(sala_id: str):
     await juego.iniciar_partida(sala_id)
     return {"mensaje": "Partida iniciada"}
 
+# ------------------------ ROOT PARA RENDER ------------------------
 @app.get("/")
 async def root():
     return {"status": "ok", "message": "Final Sentence Backend activo!"}
+
 
 
