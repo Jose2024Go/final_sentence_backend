@@ -45,3 +45,8 @@ async def iniciar_partida(sala_id: str):
     await juego.iniciar_partida(sala_id)
     return {"mensaje": "Partida iniciada"}
 
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Final Sentence Backend activo!"}
+
+
