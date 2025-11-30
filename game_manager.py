@@ -180,56 +180,7 @@ class AdministradorJuego:
 
         return sala
     
-    # Agrega estos métodos a la clase AdministradorJuego
-
-    def abandonar_sala(self, jugador_id: str, sala_id: str):
-        """Maneja cuando un jugador abandona la sala voluntariamente"""
-        if sala_id not in self.salas_activas:
-            return
-        
-        sala = self.salas_activas[sala_id]
-        
-        # Buscar y remover al jugador
-        jugador_a_remover = None
-        for jugador in sala.jugadores:
-            if jugador.id == jugador_id:
-                jugador_a_remover = jugador
-                break
-        
-        if jugador_a_remover:
-            sala.jugadores.remove(jugador_a_remover)
-            
-            # Si el jugador era el anfitrión, asignar nuevo anfitrión
-            if sala.jugador_anfitrion == jugador_id and sala.jugadores:
-                sala.jugador_anfitrion = sala.jugadores[0].id
-            
-            # Si la sala queda vacía, eliminarla
-            if len(sala.jugadores) == 0:
-                self.eliminar_sala(sala_id)
-                return
-            
-            # Actualizar en base de datos
-            try:
-                self.base_datos.actualizar_sala(sala)
-            except Exception:
-                pass
-
-    def reconectar_jugador(self, jugador_id: str, sala_id: str):
-        """Marca a un jugador como reconectado"""
-        if sala_id not in self.salas_activas:
-            return
-        
-        sala = self.salas_activas[sala_id]
-        
-        for jugador in sala.jugadores:
-            if jugador.id == jugador_id:
-                jugador.conectado = True
-                break
-        
-        try:
-            self.base_datos.actualizar_sala(sala)
-        except Exception:
-            pass
+    
 
     # ======================================================
     # ================   INICIO PARTIDA   ==================
