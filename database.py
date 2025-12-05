@@ -1,18 +1,17 @@
 # backend/database.py
-
 from pymongo import MongoClient
 from models import Jugador, Sala, Partida, EstadisticasJugador
 import os
 from datetime import datetime
 from typing import Optional
 
+
 class BaseDatos:
     def __init__(self):
         self.conexion_string = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
 
-        # Nombre CORRECTO de la base
         self.cliente = MongoClient(self.conexion_string)
-        self.db = self.cliente.final_sentence  # ← corregido
+        self.db = self.cliente.final_sentence
 
         self._crear_indices()
         self.inicializar_frases_terror()
@@ -22,6 +21,7 @@ class BaseDatos:
     # -------------------------------------------------------
     def _crear_indices(self):
         self.db.jugadores.create_index("id", unique=True)
+        self.db.jugadores.create_index("nombre", unique=True)   # 🔥 nombre único
         self.db.salas.create_index("id", unique=True)
         self.db.salas.create_index("codigo", unique=True)
         self.db.partidas.create_index("fecha")
@@ -30,7 +30,6 @@ class BaseDatos:
     # FRASES DE TERROR
     # -------------------------------------------------------
     def inicializar_frases_terror(self):
-        """Inserta frases si la colección está vacía."""
         if self.db.frases.count_documents({}) > 0:
             return
 
@@ -51,8 +50,6 @@ class BaseDatos:
             frase["fecha_agregada"] = datetime.now()
             self.db.frases.insert_one(frase)
 
-        print("✔ Se inicializaron frases de terror en MongoDB.")
-
     # -------------------------------------------------------
     # JUGADORES
     # -------------------------------------------------------
@@ -69,6 +66,9 @@ class BaseDatos:
     def obtener_jugador(self, jugador_id: str) -> Optional[Jugador]:
         datos = self.db.jugadores.find_one({"id": jugador_id})
         return Jugador(**datos) if datos else None
+
+    def obtener_jugador_por_nombre(self, nombre: str):
+        return self.db.jugadores.find_one({"nombre": nombre})
 
     # -------------------------------------------------------
     # SALAS
@@ -132,16 +132,3 @@ class BaseDatos:
 
         return EstadisticasJugador(jugador_id=jugador_id, nombre="")
 
-    # -------------------------------------------------------
-    # FRASES
-    # -------------------------------------------------------
-    def obtener_frases_terror(self, cantidad: int = 10):
-        return list(self.db.frases.find({"categoria": "terror"}).limit(cantidad))
-
-    def agregar_frase(self, texto: str, dificultad="media", categoria="terror"):
-        self.db.frases.insert_one({
-            "texto": texto,
-            "dificultad": dificultad,
-            "categoria": categoria,
-            "fecha_agregada": datetime.now()
-        })

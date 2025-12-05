@@ -4,6 +4,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
 
+
 class EstadoJugador(str, Enum):
     CONECTADO = "conectado"
     ESPERANDO = "esperando"
@@ -11,25 +12,30 @@ class EstadoJugador(str, Enum):
     ELIMINADO = "eliminado"
     GANADOR = "ganador"
 
+
 class TipoSala(str, Enum):
     PUBLICA = "publica"
     PRIVADA = "privada"
+
 
 class Jugador(BaseModel):
     id: str
     nombre: str
     avatar: str
+    password_hash: str = ""         # 🔥 AÑADIDO
     estado: EstadoJugador = EstadoJugador.CONECTADO
     errores: int = 0
     ppm: float = 0.0
     progreso: float = 0.0
     conectado: bool = True
 
+
 class Frase(BaseModel):
     id: str
     texto: str
     dificultad: str
     categoria: str
+
 
 class Sala(BaseModel):
     id: str
@@ -44,6 +50,7 @@ class Sala(BaseModel):
     tiempo_inicio: Optional[datetime] = None
     tiempo_limite: int = 45
 
+
 class Partida(BaseModel):
     id: str
     sala_id: str
@@ -52,6 +59,7 @@ class Partida(BaseModel):
     ganador: Optional[str] = None
     duracion: int = 0
     fecha: datetime
+
 
 class EstadisticasJugador(BaseModel):
     jugador_id: str
@@ -62,6 +70,7 @@ class EstadisticasJugador(BaseModel):
     mejor_ppm: float = 0.0
     total_errores: int = 0
     racha_victorias: int = 0
+
 
 class MensajeWebSocket(BaseModel):
     tipo: str
