@@ -4,11 +4,16 @@ import random
 import string
 from datetime import datetime
 from typing import Dict, List, Optional
+import logging
+import time
 
 from fastapi import WebSocket
 
-from models import Sala, Jugador, Frase, EstadoJugador, TipoSala
+# Placeholders para tus modelos y base de datos
+from models import Sala, Jugador, Frase, EstadoJugador, TipoSala, Partida
 from database import BaseDatos
+
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
 
 
 class AdministradorJuego:
@@ -32,8 +37,12 @@ class AdministradorJuego:
         Si la base está vacía o falla -> usa frases hardcodeadas.
         """
         try:
+            start = time.time()
             frases_db = self.base_datos.obtener_frases_terror(200)
-        except Exception:
+            logging.debug(f"Cargando frases desde MongoDB... ({len(frases_db)} encontradas)")
+            logging.debug(f"Tiempo carga frases: {time.time() - start:.3f}s")
+        except Exception as e:
+            logging.error(f"No se pudo cargar frases desde DB: {e}")
             frases_db = []
 
         frases = []
@@ -47,7 +56,7 @@ class AdministradorJuego:
                     dificultad=frase.get("dificultad") or "media",
                     categoria=frase.get("categoria") or "terror"
                 ))
-            print(f"✔ {len(frases)} frases cargadas desde MongoDB")
+            logging.info(f"✔ {len(frases)} frases cargadas desde MongoDB")
             return frases
 
         # fallback hardcodeado
@@ -69,7 +78,7 @@ class AdministradorJuego:
             for i, txt in enumerate(frases_hardcode)
         ]
 
-        print("⚠ Advertencia: MongoDB no respondió, usando frases HARDCODEADAS")
+        logging.warning("⚠ MongoDB no respondió, usando frases HARDCODEADAS")
         return frases
 
     # ======================================================
@@ -89,6 +98,7 @@ class AdministradorJuego:
         if sala_bd:
             self.salas_activas[sala_id] = sala_bd
             self.conexiones.setdefault(sala_id, [])
+            logging.debug(f"Sala cargada desde DB: {sala_id}")
             return sala_bd
         return None
 
@@ -113,8 +123,9 @@ class AdministradorJuego:
 
         try:
             self.base_datos.crear_sala(sala)
-        except Exception:
-            pass
+            logging.debug(f"Sala creada en DB: {sala_id}")
+        except Exception as e:
+            logging.error(f"No se pudo crear sala en DB: {e}")
 
         return sala
 
@@ -144,6 +155,7 @@ class AdministradorJuego:
             "jugador": self._serializar_jugador(jugador)
         }))
 
+        logging.debug(f"Jugador {jugador.id} unido a sala {sala_activa.id}")
         return sala_activa
 
     # ======================================================
@@ -152,6 +164,7 @@ class AdministradorJuego:
     async def abandonar_sala(self, jugador_id: str, sala_id: str):
         sala = self.salas_activas.get(sala_id)
         if not sala:
+            logging.warning(f"Intento de abandonar sala no existente: {sala_id}")
             return
 
         jugador = next((x for x in sala.jugadores if x.id == jugador_id), None)
@@ -166,6 +179,8 @@ class AdministradorJuego:
             "jugador_id": jugador_id
         })
 
+        logging.info(f"Jugador {jugador_id} abandonó sala {sala_id}")
+
         if len(sala.jugadores) == 0:
             self.eliminar_sala(sala_id)
         elif sala.jugador_anfitrion == jugador_id:
@@ -176,6 +191,7 @@ class AdministradorJuego:
                 "tipo": "nuevo_anfitrion",
                 "jugador_id": sala.jugador_anfitrion
             })
+            logging.debug(f"Nuevo anfitrión en sala {sala_id}: {sala.jugador_anfitrion}")
 
     # ======================================================
     # ================   WEBSOCKET FLOW   =================
@@ -208,6 +224,7 @@ class AdministradorJuego:
             "jugador": self._serializar_jugador(jugador)
         }))
 
+        logging.debug(f"[WS] Jugador {jugador.id} unido vía WS a sala {sala_id}")
         return sala
 
     # ======================================================
@@ -220,6 +237,7 @@ class AdministradorJuego:
         sala = self.salas_activas[sala_id]
 
         if sala.estado == "jugando":
+            logging.warning(f"Sala {sala_id} ya está jugando")
             return
 
         if len(sala.jugadores) < 2:
@@ -242,8 +260,8 @@ class AdministradorJuego:
 
         try:
             self.base_datos.actualizar_sala(sala)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.error(f"No se pudo actualizar sala {sala_id}: {e}")
 
         await self.transmitir_a_sala(sala_id, {
             "tipo": "partida_iniciada",
@@ -263,6 +281,8 @@ class AdministradorJuego:
         tarea = asyncio.create_task(self._monitor_tiempo_ronda(sala_id, sala.tiempo_limite))
         self._monitores_tiempo[sala_id] = tarea
 
+        logging.info(f"Partida iniciada en sala {sala_id}, frase: {sala.frase_actual.texto}")
+
     # ======================================================
     # ================   MONITOR TIEMPO   =================
     # ======================================================
@@ -270,6 +290,7 @@ class AdministradorJuego:
         try:
             await asyncio.sleep(tiempo_limite)
         except asyncio.CancelledError:
+            logging.debug(f"Monitor de tiempo cancelado para sala {sala_id}")
             return
 
         if sala_id not in self.salas_activas:
@@ -279,6 +300,8 @@ class AdministradorJuego:
 
         if sala.estado != "jugando":
             return
+
+        logging.debug(f"Tiempo agotado para sala {sala_id}, procesando jugadores restantes")
 
         for j in sala.jugadores:
             if j.estado == EstadoJugador.JUGANDO and j.progreso < 100:
@@ -399,7 +422,6 @@ class AdministradorJuego:
 
         sala.estado = "finalizada"
 
-        from models import Partida
         partida = Partida(
             id=f"partida_{int(datetime.now().timestamp() * 1000)}",
             sala_id=sala_id,
@@ -412,6 +434,7 @@ class AdministradorJuego:
 
         try:
             self.base_datos.guardar_partida(partida)
+            logging.info(f"Partida guardada en DB: {partida.id}")
         except:
             pass
 
@@ -437,6 +460,7 @@ class AdministradorJuego:
                 "sala_id": sala_id
             }))
             del self.salas_activas[sala_id]
+            logging.info(f"Sala eliminada: {sala_id}")
 
         if sala_id in self.conexiones:
             for ws in list(self.conexiones[sala_id]):
@@ -452,57 +476,26 @@ class AdministradorJuego:
             pass
 
     # ======================================================
-    # ================   ENVÍO DE ESTADO   =================
+    # ================   ENVÍO WS   =======================
+    # ======================================================
+    async def transmitir_a_sala(self, sala_id: str, mensaje: dict):
+        if sala_id not in self.conexiones:
+            return
+        for ws in self.conexiones[sala_id]:
+            try:
+                await ws.send_json(mensaje)
+            except Exception as e:
+                logging.warning(f"Fallo al enviar WS: {e}")
+
+    # ======================================================
+    # ================   SERIALIZACIÓN   ==================
     # ======================================================
     def _serializar_jugador(self, jugador: Jugador) -> dict:
         return {
             "id": jugador.id,
             "nombre": jugador.nombre,
-            "avatar": jugador.avatar,
-            "ppm": jugador.ppm,
+            "estado": jugador.estado,
             "progreso": jugador.progreso,
-            "errores": jugador.errores,
-            "estado": jugador.estado
+            "ppm": jugador.ppm,
+            "errores": jugador.errores
         }
-
-    def _estado_sala_para_envio(self, sala: Sala) -> dict:
-        return {
-            "tipo": "estado_sala",
-            "sala_id": sala.id,
-            "codigo": sala.codigo,
-            "estado": sala.estado,
-            "jugador_anfitrion": sala.jugador_anfitrion,
-            "max_jugadores": sala.max_jugadores,
-            "ronda_actual": sala.ronda_actual,
-            "jugadores": [self._serializar_jugador(j) for j in sala.jugadores],
-            "frase_actual_presentada": bool(sala.frase_actual)
-        }
-
-    async def enviar_estado_sala(self, sala_id: str):
-        if sala_id not in self.salas_activas:
-            return
-
-        sala = self.salas_activas[sala_id]
-        estado = self._estado_sala_para_envio(sala)
-
-        await self.transmitir_a_sala(sala_id, estado)
-
-    async def transmitir_a_sala(self, sala_id: str, mensaje: dict):
-        if sala_id not in self.conexiones:
-            return
-
-        conexiones_validas = []
-
-        for ws in list(self.conexiones[sala_id]):
-            try:
-                await ws.send_json(mensaje)
-                conexiones_validas.append(ws)
-            except Exception as e:
-                try:
-                    await ws.close()
-                except:
-                    pass
-                print(f"[WS ERROR] {e}")
-
-        self.conexiones[sala_id] = conexiones_validas
-
