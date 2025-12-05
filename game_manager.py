@@ -506,3 +506,4 @@ class AdministradorJuego:
 
         self.conexiones[sala_id] = conexiones_validas
 
+
