@@ -38,19 +38,19 @@ class AdministradorJuego:
 
         frases = []
 
-        # Si Mongo sí tiene frases
         if frases_db:
             for i, frase in enumerate(frases_db):
+                mongo_id = frase.get("_id")
                 frases.append(Frase(
-                    id=str(frase.get("_id", i)),
-                    texto=frase.get("texto", ""),
-                    dificultad=frase.get("dificultad", "media"),
-                    categoria=frase.get("categoria", "terror")
+                    id=str(mongo_id) if mongo_id else str(i),
+                    texto=frase.get("texto") or "",
+                    dificultad=frase.get("dificultad") or "media",
+                    categoria=frase.get("categoria") or "terror"
                 ))
             print(f"✔ {len(frases)} frases cargadas desde MongoDB")
             return frases
 
-        # Si no, usar fallback
+        # fallback hardcodeado
         frases_hardcode = [
             "La sombra avanzaba silenciosa por el pasillo.",
             "Al abrir la puerta, nadie respondió al llamado.",
@@ -70,7 +70,6 @@ class AdministradorJuego:
         ]
 
         print("⚠ Advertencia: MongoDB no respondió, usando frases HARDCODEADAS")
-
         return frases
 
     # ======================================================
@@ -148,7 +147,38 @@ class AdministradorJuego:
         return sala_activa
 
     # ======================================================
-    # ================   WEBSOCKET FLOW   ==================
+    # ================   ABANDONAR SALA   =================
+    # ======================================================
+    async def abandonar_sala(self, jugador_id: str, sala_id: str):
+        sala = self.salas_activas.get(sala_id)
+        if not sala:
+            return
+
+        jugador = next((x for x in sala.jugadores if x.id == jugador_id), None)
+        if not jugador:
+            return
+
+        sala.jugadores.remove(jugador)
+        self.base_datos.actualizar_sala(sala)
+
+        await self.transmitir_a_sala(sala_id, {
+            "tipo": "jugador_abandono",
+            "jugador_id": jugador_id
+        })
+
+        if len(sala.jugadores) == 0:
+            self.eliminar_sala(sala_id)
+        elif sala.jugador_anfitrion == jugador_id:
+            # reasignar anfitrión
+            sala.jugador_anfitrion = sala.jugadores[0].id
+            self.base_datos.actualizar_sala(sala)
+            await self.transmitir_a_sala(sala_id, {
+                "tipo": "nuevo_anfitrion",
+                "jugador_id": sala.jugador_anfitrion
+            })
+
+    # ======================================================
+    # ================   WEBSOCKET FLOW   =================
     # ======================================================
     def unir_sala_ws(self, jugador_id: str, sala_id: str) -> Optional[Sala]:
         jugador = self.base_datos.obtener_jugador(jugador_id)
@@ -179,11 +209,9 @@ class AdministradorJuego:
         }))
 
         return sala
-    
-    
 
     # ======================================================
-    # ================   INICIO PARTIDA   ==================
+    # ================   INICIO PARTIDA   =================
     # ======================================================
     async def iniciar_partida(self, sala_id: str):
         if sala_id not in self.salas_activas:
@@ -204,11 +232,8 @@ class AdministradorJuego:
         sala.estado = "jugando"
         sala.ronda_actual += 1
         sala.tiempo_inicio = datetime.now()
-
-        # Seleccionar frase
         sala.frase_actual = random.choice(self.frases_terror)
 
-        # Resetear stats de jugadores
         for j in sala.jugadores:
             j.estado = EstadoJugador.JUGANDO
             j.errores = 0
@@ -220,7 +245,6 @@ class AdministradorJuego:
         except Exception:
             pass
 
-        # Enviar inicio
         await self.transmitir_a_sala(sala_id, {
             "tipo": "partida_iniciada",
             "frase": sala.frase_actual.texto,
@@ -228,7 +252,7 @@ class AdministradorJuego:
             "ronda_actual": sala.ronda_actual
         })
 
-        # Lanzar monitor
+        # monitor de tiempo
         if sala_id in self._monitores_tiempo:
             old = self._monitores_tiempo.pop(sala_id)
             try:
@@ -240,7 +264,7 @@ class AdministradorJuego:
         self._monitores_tiempo[sala_id] = tarea
 
     # ======================================================
-    # ================   MONITOR TIEMPO   ==================
+    # ================   MONITOR TIEMPO   =================
     # ======================================================
     async def _monitor_tiempo_ronda(self, sala_id: str, tiempo_limite: int):
         try:
@@ -256,7 +280,6 @@ class AdministradorJuego:
         if sala.estado != "jugando":
             return
 
-        # Marcar eliminados por tiempo
         for j in sala.jugadores:
             if j.estado == EstadoJugador.JUGANDO and j.progreso < 100:
                 j.estado = EstadoJugador.ELIMINADO
@@ -271,16 +294,12 @@ class AdministradorJuego:
         if len(vivos) == 1:
             await self.finalizar_partida(sala_id, vivos[0].id)
         else:
-            # Nadie completó: mejor PPM / progreso
-            mejor = max(sala.jugadores,
-                        key=lambda x: (x.progreso, x.ppm),
-                        default=None)
-
+            mejor = max(sala.jugadores, key=lambda x: (x.progreso, x.ppm), default=None)
             ganador = mejor.id if mejor else None
             await self.finalizar_partida(sala_id, ganador)
 
     # ======================================================
-    # ================   PROCESAR TEXTO   ==================
+    # ================   PROCESAR TEXTO   =================
     # ======================================================
     async def procesar_escritura(self, jugador_id: str, sala_id: str, texto: str, tiempo_tomado: float):
         if sala_id not in self.salas_activas:
@@ -487,4 +506,3 @@ class AdministradorJuego:
 
         self.conexiones[sala_id] = conexiones_validas
 
-    
